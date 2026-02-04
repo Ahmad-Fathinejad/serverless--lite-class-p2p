@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>کلاس آنلاین مینیمال (P2P)</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: Tahoma, sans-serif; background: #f0f2f5; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        
+        /* بخش ویدیوها */
+        .video-container { display: flex; flex: 1; justify-content: center; align-items: center; gap: 10px; padding: 10px; background: #000; }
+        video { width: 48%; height: auto; max-height: 100%; border-radius: 8px; background: #222; object-fit: cover; border: 2px solid #444; }
+        
+        /* پنل کنترل و چت */
+        .controls { background: #fff; padding: 15px; border-top: 2px solid #ccc; display: flex; flex-direction: column; gap: 10px; height: 30%; }
+        
+        /* بخش اتصال */
+        .connection-box { display: flex; gap: 10px; align-items: center; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+        input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; flex: 1; }
+        button { padding: 8px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .my-id-display { font-weight: bold; color: #333; font-size: 0.9em; }
+
+        /* بخش چت */
+        .chat-area { flex: 1; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background: #fafafa; border-radius: 4px; margin-bottom: 5px; }
+        .message { margin-bottom: 5px; padding: 5px; border-radius: 4px; font-size: 0.9em; }
+        .msg-me { background: #dcf8c6; align-self: flex-start; text-align: right; }
+        .msg-remote { background: #fff; border: 1px solid #eee; text-align: right; }
+        
+        /* ورودی پیام */
+        .message-input-box { display: flex; gap: 5px; }
+        
+        /* وضعیت */
+        #status { font-size: 0.8em; color: orange; margin-right: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="video-container">
+        <video id="localVideo" autoplay muted playsinline></video>
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+
+    <div class="controls">
+        <div class="connection-box">
+            <span class="my-id-display">شناسه من: <span id="myId" style="color:blue;">درحال دریافت...</span></span>
+            <input type="text" id="remoteIdInput" placeholder="شناسه طرف مقابل را وارد کنید...">
+            <button onclick="startConnection()">اتصال به کلاس</button>
+            <span id="status">وضعیت: قطع</span>
+        </div>
+
+        <div class="chat-area" id="chatArea">
+            <div style="color:#888; text-align:center;">هنوز پیامی نیست...</div>
+        </div>
+
+        <div class="message-input-box">
+            <input type="text" id="msgInput" placeholder="پیام خود را بنویسید..." onkeypress="handleEnter(event)">
+            <button onclick="sendMessage()">ارسال</button>
+        </div>
+    </div>
+
+    <script>
+        // --- تنظیمات برای اینترنت کند ---
+        const mediaConstraints = {
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true
+            },
+            video: {
+                width: { ideal: 320 },  // کیفیت پایین
+                height: { ideal: 240 },
+                frameRate: { max: 15 }  // فریم‌ریت کم برای کاهش مصرف دیتا
+            }
+        };
+
+        let localStream;
+        let peer;
+        let dataConn; // اتصال چت متنی
+
+        // 1. دریافت دسترسی دوربین و میکروفن در شروع کار
+        navigator.mediaDevices.getUserMedia(mediaConstraints)
+            .then(stream => {
+                localStream = stream;
+                document.getElementById('localVideo').srcObject = stream;
+                initPeer(); // بعد از گرفتن دوربین، پیر را می‌سازیم
+            })
+            .catch(err => {
+                alert("خطا در دسترسی به دوربین/میکروفن: " + err);
+            });
+
+        // 2. راه‌اندازی PeerJS
+        function initPeer() {
+            // اتصال به سرور رایگان PeerJS Cloud
+            peer = new Peer(null, {
+                debug: 2,
+                config: {
+                    'iceServers': [
+                        { urls: 'stun:stun.l.google.com:19302' }, // سرور رایگان گوگل
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ]
+                }
+            });
+
+            // وقتی شناسه من ساخته شد
+            peer.on('open', (id) => {
+                document.getElementById('myId').innerText = id;
+                document.getElementById('status').innerText = "آماده اتصال";
+                document.getElementById('status').style.color = "green";
+            });
+
+            // وقتی کسی به من زنگ می‌زند (تماس ویدیویی)
+            peer.on('call', (call) => {
+                // قبول کردن تماس و ارسال تصویر خودمان
+                call.answer(localStream);
+                // دریافت تصویر طرف مقابل
+                call.on('stream', (remoteStream) => {
+                    document.getElementById('remoteVideo').srcObject = remoteStream;
+                });
+            });
+
+            // وقتی کسی به من وصل می‌شود (چت متنی)
+            peer.on('connection', (conn) => {
+                setupDataConnection(conn);
+            });
+            
+            peer.on('error', (err) => {
+                console.error(err);
+                alert("خطا: " + err.type);
+            });
+        }
+
+        // 3. شروع ارتباط (وقتی دکمه اتصال را می‌زنید)
+        function startConnection() {
+            const remoteId = document.getElementById('remoteIdInput').value;
+            if (!remoteId) return alert("لطفا شناسه طرف مقابل را وارد کنید");
+
+            document.getElementById('status').innerText = "درحال اتصال...";
+
+            // الف) برقراری تماس ویدیویی
+            const call = peer.call(remoteId, localStream);
+            call.on('stream', (remoteStream) => {
+                document.getElementById('remoteVideo').srcObject = remoteStream;
+            });
+
+            // ب) برقراری اتصال چت متنی
+            const conn = peer.connect(remoteId);
+            setupDataConnection(conn);
+        }
+
+        // تنظیمات اتصال چت
+        function setupDataConnection(conn) {
+            dataConn = conn;
+            
+            dataConn.on('open', () => {
+                document.getElementById('status').innerText = "متصل شد!";
+                document.getElementById('status').style.color = "blue";
+                addMessage("سیستم", "ارتباط برقرار شد.");
+            });
+
+            dataConn.on('data', (data) => {
+                addMessage("همکلاسی", data, 'msg-remote');
+            });
+        }
+
+        // 4. ارسال پیام متنی
+        function sendMessage() {
+            const msgInput = document.getElementById('msgInput');
+            const msg = msgInput.value;
+            
+            if (msg && dataConn && dataConn.open) {
+                dataConn.send(msg); // ارسال به طرف مقابل
+                addMessage("من", msg, 'msg-me'); // نمایش برای خودمان
+                msgInput.value = '';
+            } else {
+                if(!dataConn) alert("هنوز متصل نشده‌اید!");
+            }
+        }
+
+        // نمایش پیام در صفحه
+        function addMessage(sender, text, cssClass) {
+            const chatArea = document.getElementById('chatArea');
+            const div = document.createElement('div');
+            div.className = `message ${cssClass || ''}`;
+            div.innerHTML = `<strong>${sender}:</strong> ${text}`;
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight; // اسکرول خودکار به پایین
+        }
+
+        // ارسال با زدن اینتر
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendMessage();
+        }
+    </script>
+</body>
+</html>
